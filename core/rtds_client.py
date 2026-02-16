@@ -36,24 +36,39 @@ class RTDSClient:
             self.stats.connected = False
 
             def on_open(ws: WebSocketApp) -> None:
-                payload = {
-                    "type": "subscribe",
-                    "topic": "crypto_prices_chainlink",
-                    "symbols": [FIXED_SYMBOL],
+                subscribe_payload = {
+                    "action": "subscribe",
+                    "subscriptions": [
+                        {
+                            "topic": "crypto_prices_chainlink",
+                            "type": "*",
+                            "filters": json.dumps({"symbol": FIXED_SYMBOL}),
+                        },
+                        {
+                            "topic": "crypto_prices_chainlink",
+                            "type": "*",
+                            "filters": json.dumps({"symbol": "BTCUSD"}),
+                        },
+                    ],
                 }
-                ws.send(json.dumps(payload))
+                ws.send(json.dumps(subscribe_payload))
                 self.stats.connected = True
                 self.stats.last_err = "OK"
 
-            def on_message(_ws: WebSocketApp, message: str) -> None:
+            def on_message(ws: WebSocketApp, message: str) -> None:
                 self.stats.last_msg_time = time.time()
+                if isinstance(message, str) and message.lower() == "ping":
+                    ws.send("pong")
+                    return
+
                 try:
                     data = json.loads(message)
                 except json.JSONDecodeError:
                     return
+
                 parsed = self._parse_message(data)
-                if parsed:
-                    self.out_queue.put(parsed)
+                for item in parsed:
+                    self.out_queue.put(item)
 
             def on_error(_ws: WebSocketApp, error: Any) -> None:
                 self.stats.last_err = str(error)
@@ -79,18 +94,13 @@ class RTDSClient:
             backoff = min(backoff * 2, 20)
 
     @staticmethod
-    def _parse_message(data: dict[str, Any]) -> tuple[int, float] | None:
-        def _extract(container: dict[str, Any]) -> tuple[int, float] | None:
-            symbol = str(container.get("symbol", "")).lower()
-            if symbol != FIXED_SYMBOL:
-                return None
-            ts = container.get("ts") or container.get("timestamp") or container.get("t")
-            price = (
-                container.get("price")
-                or container.get("value")
-                or container.get("p")
-                or container.get("px")
-            )
+    def _extract_points(container: dict[str, Any]) -> list[tuple[int, float]]:
+        points: list[tuple[int, float]] = []
+
+        def parse_one(item: dict[str, Any]) -> tuple[int, float] | None:
+            ts = item.get("ts") or item.get("timestamp") or item.get("t")
+            price = item.get("price") or item.get("value") or item.get("p") or item.get("px")
+
             ts_ms = None
             if ts is not None:
                 try:
@@ -100,17 +110,30 @@ class RTDSClient:
                     ts_ms = None
             if ts_ms is None:
                 ts_ms = int(time.time() * 1000)
+
             price_f = safe_float(price)
             if price_f is None:
                 return None
             return ts_ms, price_f
 
-        if isinstance(data.get("data"), list):
-            for item in data["data"]:
+        data = container.get("data")
+        if isinstance(data, list):
+            for item in data:
                 if isinstance(item, dict):
-                    parsed = _extract(item)
+                    parsed = parse_one(item)
                     if parsed:
-                        return parsed
-        if isinstance(data.get("data"), dict):
-            return _extract(data["data"])
-        return _extract(data)
+                        points.append(parsed)
+            return points
+        if isinstance(data, dict):
+            parsed = parse_one(data)
+            return [parsed] if parsed else []
+
+        parsed = parse_one(container)
+        return [parsed] if parsed else []
+
+    @classmethod
+    def _parse_message(cls, data: dict[str, Any]) -> list[tuple[int, float]]:
+        payload = data.get("payload")
+        if isinstance(payload, dict):
+            return cls._extract_points(payload)
+        return cls._extract_points(data)
