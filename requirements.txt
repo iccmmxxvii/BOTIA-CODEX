@@ -1,0 +1,9 @@
+streamlit>=1.54
+pandas
+numpy
+requests
+plotly
+websocket-client
+scikit-learn
+joblib
+streamlit-autorefresh
