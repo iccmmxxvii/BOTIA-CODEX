@@ -75,6 +75,14 @@ class Storage:
             return df
         return df.sort_values("ts_ms").reset_index(drop=True)
 
+    def tick_bounds_s(self) -> tuple[int, int] | None:
+        cur = self.conn.cursor()
+        cur.execute("SELECT MIN(ts_ms), MAX(ts_ms) FROM ticks")
+        row = cur.fetchone()
+        if not row or row[0] is None or row[1] is None:
+            return None
+        return int(row[0] // 1000), int(row[1] // 1000)
+
     def get_tick_on_or_after_else_before(self, ts_s: int) -> tuple[int, float] | None:
         target_ms = ts_s * 1000
         cur = self.conn.cursor()

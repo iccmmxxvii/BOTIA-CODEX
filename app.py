@@ -98,13 +98,27 @@ cols2[3].metric("Ticks buffer size", st.session_state.tick_queue.qsize())
 st.caption(f"WS last_err: {ws_dict['last_err']}")
 
 st.subheader("C) Modelo IA")
-feat = build_features(mkt["ticks"], mkt["start_ts"])
+current_ep_start = int(time.time())
+current_ep_start -= current_ep_start % 300
+feat = build_features(mkt["ticks"], current_ep_start)
 p_up_ml = model.predict_p_up(feat) if feat else None
+
 p_up_mkt = None
-price_info = {"error": ""}
+price_info = {"error": "", "source": None}
 if up_token:
     price_info = clob.get_token_mid(up_token)
     p_up_mkt = price_info.get("mid")
+
+if p_up_mkt is None:
+    fallback_prices = token_map.get("outcome_prices") or []
+    fallback_outcomes = token_map.get("outcomes") or []
+    for idx, outcome in enumerate(fallback_outcomes):
+        if str(outcome).strip().lower() in {"yes", "up"} and idx < len(fallback_prices):
+            try:
+                p_up_mkt = float(fallback_prices[idx])
+            except (TypeError, ValueError):
+                p_up_mkt = None
+            break
 
 status = model.status()
 signal, edge = engine.decide_signal(p_up_ml, p_up_mkt, status.healthy)
@@ -122,13 +136,17 @@ st.write(
         "last_trained": status.last_trained,
         "n_samples": status.n_samples,
         "metrics": status.metrics,
+        "prediction_episode_start_ts": current_ep_start,
         "up_token": up_token,
+        "clob_source": price_info.get("source"),
         "clob_error": price_info.get("error"),
     }
 )
 
 if not up_token:
     st.warning("No se pudo mapear token UP/YES desde Gamma. Señal forzada a HOLD.")
+elif p_up_mkt is None:
+    st.warning("No se pudo obtener p_up_mkt desde CLOB ni fallback en Gamma. Señal forzada a HOLD.")
 
 engine.paper_trade_step(signal, last_price, p_up_ml, p_up_mkt, edge)
 

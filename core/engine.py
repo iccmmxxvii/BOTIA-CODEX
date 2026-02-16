@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from core.features import build_features, episodes_to_training_set
+from core.features import episodes_to_training_set
 from core.model import EpisodeModel
 from core.storage import Storage
 from core.utils import FIXED_SLUG, first_on_or_after, parse_end_ts_from_slug
@@ -39,12 +39,24 @@ class Engine:
         return len(rows)
 
     def build_missing_episodes(self) -> int:
-        now = int(time.time())
-        latest = self.storage.latest_episode_end()
-        if latest is None:
-            latest = now - (now % 300)
+        bounds = self.storage.tick_bounds_s()
+        if not bounds:
+            return 0
+
+        min_tick_s, max_tick_s = bounds
+        latest_ep_end = self.storage.latest_episode_end()
+
+        if latest_ep_end is None:
+            start_end_ts = ((min_tick_s // 300) * 300) + 300
+        else:
+            start_end_ts = latest_ep_end + 300
+
+        max_complete_end_ts = (max_tick_s // 300) * 300
+        if start_end_ts > max_complete_end_ts:
+            return 0
+
         count = 0
-        for end_ts in range(latest + 300, now - 60, 300):
+        for end_ts in range(start_end_ts, max_complete_end_ts + 1, 300):
             start_ts = end_ts - 300
             s = self.storage.get_tick_on_or_after_else_before(start_ts)
             e = self.storage.get_tick_on_or_after_else_before(end_ts)
